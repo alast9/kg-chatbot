@@ -31,7 +31,7 @@ import urllib.error
 
 log = logging.getLogger("auth.dremio")
 
-DREMIO_CLIENT_ID  = os.getenv("DREMIO_OAUTH_CLIENT_ID", "")
+DREMIO_CLIENT_ID  = os.getenv("DREMIO_OAUTH_CLIENT_ID", "d5efa6de-123f-49e6-bf1b-4a1421cd3244")
 DREMIO_PROJECT_ID = os.getenv("DREMIO_PROJECT_ID",       "dea2a74c-2f8a-4eef-8d40-c87db48d79ff")
 APP_BASE_URL      = os.getenv("APP_BASE_URL",            "https://localhost:8443")
 

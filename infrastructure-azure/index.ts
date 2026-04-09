@@ -432,7 +432,7 @@ const chatbotApp2 = new azure_native.app.ContainerApp(n("app"), {
                 { name: "DREMIO_PROJECT_ID",           value: "dea2a74c-2f8a-4eef-8d40-c87db48d79ff" },
                 { name: "DREMIO_PAT",                  secretRef: "dremio-pat" },
                 // Native OAuth app — PKCE, no client_secret required
-                { name: "DREMIO_OAUTH_CLIENT_ID",      value: "dc9160c2-76aa-4fab-9bc0-cd1bebe6da13" },
+                { name: "DREMIO_OAUTH_CLIENT_ID",      value: "d5efa6de-123f-49e6-bf1b-4a1421cd3244" },
 
                 // ── Data backends ──────────────────────────────────────────
                 // MONGO_URI not set — Cosmos DB not provisioned; session.py falls back gracefully

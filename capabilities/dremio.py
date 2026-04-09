@@ -257,22 +257,25 @@ DREMIO CLOUD DATA QUERIES
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _token(self) -> str:
-        """Return the best available token: per-user OAuth > service PAT."""
+        """Return the best available token: per-user Entra/OAuth > service PAT.
+
+        Per-user token is preferred so Dremio enforces per-user access control.
+        PAT is only used as a fallback when no user token is available.
+        """
+        # Per-user token (Entra silent exchange or PKCE OAuth)
         with self._lock:
             tok = self._dremio_token
             exp = self._dremio_token_expires_at
-
-        # Per-user token valid
         if tok and time.time() < exp:
             return tok
 
-        # Fall back to PAT
+        # Service-account PAT fallback (shared identity — use only as last resort)
         if DREMIO_PAT:
+            log.warning("[Dremio] No per-user token — falling back to service PAT")
             return DREMIO_PAT
 
         raise RuntimeError(
-            "Dremio not connected — please visit /auth/dremio/connect to authorise "
-            "or set DREMIO_PAT for service-account access")
+            "Dremio not connected — set DREMIO_PAT or visit /auth/dremio/connect")
 
     def _run_sql(self, sql: str, description: str = "") -> dict:
         if description:

@@ -216,8 +216,10 @@ const mcpServerSp = new azuread.ServicePrincipal("kg-mcp-server-sp", {
 const chatbotApp = new azuread.Application("kg-chatbot-app", {
     displayName:    "KG Chatbot",
     signInAudience: "AzureADMyOrg",
-    // NOTE: "Expose an API" (api://a24f5558.../Dremio.Access) is configured manually
-    // in Entra ID portal — Pulumi SP lacks Application.ReadWrite.All to manage it.
+    // NOTE: Configured manually in Entra ID portal (Pulumi SP lacks permissions):
+    // 1. "Expose an API" → api://a24f5558.../Dremio.Access scope
+    // 2. "Token configuration" → Add optional claim → Access token → email
+    //    (required so Dremio External Token Provider can map claim to user)
     web: {
         redirectUris:  [pulumi.interpolate`${chatbotBaseUrl}/auth/callback`],
         implicitGrant: {

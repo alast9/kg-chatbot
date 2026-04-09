@@ -1,32 +1,29 @@
 """
-auth/dremio_oauth.py — Dremio Cloud OAuth 2.0 (authorization_code flow)
-========================================================================
-Dremio Cloud OAuth app (org-level) endpoints:
+auth/dremio_oauth.py — Dremio Cloud OAuth 2.0 (authorization_code + PKCE, Native app)
+=======================================================================================
+Dremio Cloud OAuth app (org-level, Native app type — no client secret):
   Authorize:  https://app.dremio.cloud/oauth2/authorize
   Token:      https://api.dremio.cloud/v0/projects/{project_id}/oauth2/token
   Redirect:   <APP_BASE_URL>/auth/dremio/connect   (configured in Dremio OAuth app settings)
 
-Flow:
-  1. GET /auth/dremio/connect   (no params)    → redirect to Dremio authorize URL
+Flow (PKCE — no client_secret required for Native apps):
+  1. GET /auth/dremio/connect   (no params)    → redirect to Dremio authorize URL w/ PKCE challenge
   2. Dremio authenticates user → redirects to /auth/dremio/connect?code=...
-  3. GET /auth/dremio/connect?code=...         → exchange code for token, store in session
+  3. GET /auth/dremio/connect?code=...         → exchange code + verifier, store token in session
 
 Required env vars:
   DREMIO_OAUTH_CLIENT_ID      Client ID from Dremio OAuth app settings
-  DREMIO_OAUTH_CLIENT_SECRET  Client secret from Dremio OAuth app settings
   DREMIO_PROJECT_ID           Dremio Cloud project UUID
   APP_BASE_URL                Public base URL (for redirect URI)
-
-Future — SSO shortcut (like Snowflake):
-  Configure Entra ID as SAML/OIDC IdP in Dremio Cloud org settings.
-  Then exchange the user's Entra ID token for a Dremio token silently at chatbot
-  login, eliminating the explicit /auth/dremio/connect step entirely.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import logging
 import os
+import secrets
 import time
 import urllib.parse
 import urllib.request
@@ -34,45 +31,70 @@ import urllib.error
 
 log = logging.getLogger("auth.dremio")
 
-DREMIO_CLIENT_ID     = os.getenv("DREMIO_OAUTH_CLIENT_ID",     "")
-DREMIO_CLIENT_SECRET = os.getenv("DREMIO_OAUTH_CLIENT_SECRET", "")
-DREMIO_PROJECT_ID    = os.getenv("DREMIO_PROJECT_ID",          "dea2a74c-2f8a-4eef-8d40-c87db48d79ff")
-APP_BASE_URL         = os.getenv("APP_BASE_URL",               "https://localhost:8443")
+DREMIO_CLIENT_ID  = os.getenv("DREMIO_OAUTH_CLIENT_ID", "")
+DREMIO_PROJECT_ID = os.getenv("DREMIO_PROJECT_ID",       "dea2a74c-2f8a-4eef-8d40-c87db48d79ff")
+APP_BASE_URL      = os.getenv("APP_BASE_URL",            "https://localhost:8443")
 
 DREMIO_AUTHORIZE_URL = "https://app.dremio.cloud/oauth2/authorize"
 DREMIO_TOKEN_URL     = f"https://api.dremio.cloud/v0/projects/{DREMIO_PROJECT_ID}/oauth2/token"
 DREMIO_REDIRECT_URI  = f"{APP_BASE_URL}/auth/dremio/connect"
 
-# Scopes — Dremio Cloud uses "read" or "write" at the org level
-# Leave blank to use Dremio's default scopes for the OAuth app
+# Scopes — leave blank to use Dremio's default scopes for the OAuth app
 DREMIO_SCOPES = os.getenv("DREMIO_OAUTH_SCOPES", "")
+
+# In-memory PKCE state store: state_token → code_verifier
+# (single-process; fine for the chatbot's scale)
+_pending_verifiers: dict[str, str] = {}
+
+
+def _pkce_pair() -> tuple[str, str]:
+    """Generate (code_verifier, code_challenge) for PKCE S256."""
+    verifier  = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
+    digest    = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return verifier, challenge
 
 
 def authorize_url() -> str:
-    """Build the Dremio OAuth authorize URL to redirect the user to."""
+    """
+    Build the Dremio OAuth authorize URL (PKCE).
+    Stores the code_verifier in memory keyed by state token so exchange_code() can use it.
+    """
+    state_token        = secrets.token_urlsafe(32)
+    code_verifier, code_challenge = _pkce_pair()
+    _pending_verifiers[state_token] = code_verifier
+
     params = {
-        "client_id":     DREMIO_CLIENT_ID,
-        "response_type": "code",
-        "redirect_uri":  DREMIO_REDIRECT_URI,
+        "client_id":             DREMIO_CLIENT_ID,
+        "response_type":         "code",
+        "redirect_uri":          DREMIO_REDIRECT_URI,
+        "code_challenge":        code_challenge,
+        "code_challenge_method": "S256",
+        "state":                 state_token,
     }
     if DREMIO_SCOPES:
         params["scope"] = DREMIO_SCOPES
     return f"{DREMIO_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
 
 
-def exchange_code(code: str) -> tuple[str, float]:
+def exchange_code(code: str, state: str = "") -> tuple[str, float]:
     """
-    Exchange an authorization code for an access token.
+    Exchange an authorization code for an access token using PKCE (no client_secret).
     Returns (access_token, expires_at_unix_timestamp).
     """
-    payload = urllib.parse.urlencode({
-        "grant_type":    "authorization_code",
-        "client_id":     DREMIO_CLIENT_ID,
-        "client_secret": DREMIO_CLIENT_SECRET,
-        "code":          code,
-        "redirect_uri":  DREMIO_REDIRECT_URI,
-    }).encode()
+    # Retrieve the stored PKCE verifier (if state was passed through)
+    code_verifier = _pending_verifiers.pop(state, "") if state else ""
 
+    form: dict = {
+        "grant_type":   "authorization_code",
+        "client_id":    DREMIO_CLIENT_ID,
+        "code":         code,
+        "redirect_uri": DREMIO_REDIRECT_URI,
+    }
+    if code_verifier:
+        form["code_verifier"] = code_verifier
+
+    payload = urllib.parse.urlencode(form).encode()
     req = urllib.request.Request(
         DREMIO_TOKEN_URL,
         data=payload,
@@ -100,5 +122,5 @@ def exchange_code(code: str) -> tuple[str, float]:
 
 
 def is_configured() -> bool:
-    """Return True if OAuth client credentials are set."""
-    return bool(DREMIO_CLIENT_ID and DREMIO_CLIENT_SECRET)
+    """Return True if OAuth client ID is set (no secret needed for Native apps)."""
+    return bool(DREMIO_CLIENT_ID)

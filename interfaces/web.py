@@ -122,11 +122,12 @@ def create_app(core, mongo, redis, cap_names: list[str]) -> FastAPI:
     # ── Dremio OAuth (authorization_code flow) ────────────────────────────────
 
     @app.get("/auth/dremio/connect")
-    async def dremio_connect(request: Request, code: str = None, error: str = None):
+    async def dremio_connect(request: Request, code: str = None, state: str = None,
+                             error: str = None):
         """
         Dual-purpose endpoint:
-          GET /auth/dremio/connect          → redirect to Dremio OAuth authorize URL
-          GET /auth/dremio/connect?code=... → exchange code, store token, redirect to /
+          GET /auth/dremio/connect          → redirect to Dremio OAuth authorize URL (PKCE)
+          GET /auth/dremio/connect?code=... → exchange code + PKCE verifier, store token
         """
         from auth.dremio_oauth import authorize_url, exchange_code, is_configured
 
@@ -147,7 +148,7 @@ def create_app(core, mongo, redis, cap_names: list[str]) -> FastAPI:
                     "<p>Set DREMIO_OAUTH_CLIENT_ID and DREMIO_OAUTH_CLIENT_SECRET.</p>",
                     status_code=500)
             try:
-                token, expires_at = await asyncio.to_thread(exchange_code, code)
+                token, expires_at = await asyncio.to_thread(exchange_code, code, state or "")
                 s.dremio_token             = token
                 s.dremio_token_expires_at  = expires_at
                 log.info("Dremio OAuth connected: %s", s.email)

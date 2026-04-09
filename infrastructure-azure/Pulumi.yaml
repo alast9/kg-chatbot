@@ -1,0 +1,6 @@
+name: kg-chatbot-azure
+runtime:
+  name: nodejs
+  options:
+    nodeargs: "--max-old-space-size=6144"
+description: Knowledge Graph Chatbot — Azure Container Apps (Azure AI Foundry + MCP 2025-11-25)

@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+duckdb
+pydantic
+PyJWT[crypto]
+azure-storage-blob

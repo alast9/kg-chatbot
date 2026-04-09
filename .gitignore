@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Certs / keys — never commit
+certs/
+*.pem
+*.key
+*.p8
+*.p12
+
+# Pulumi state & secrets
+.pulumi/
+infrastructure-azure/node_modules/
+infrastructure/node_modules/
+infrastructure/.pulumi/
+infrastructure-azure/.pulumi/
+# Pulumi.<stack>.yaml files contain encrypted secrets — safe to commit but
+# exclude raw secret overrides if any exist alongside them
+*.secrets.yaml
+
+# Environment files
+.env
+.env.*
+*.local
+
+# IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage

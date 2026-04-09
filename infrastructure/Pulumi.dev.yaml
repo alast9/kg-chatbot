@@ -1,0 +1,14 @@
+config:
+  aws:region: us-east-1
+  kg-chatbot:mongoUri:
+    secure: AAABAPqs60hI+19p03VHKDGRavpBg/Ba3NY02vBEWMyOBoWL+WTBun5UYjCNJDqhYTKpJKBSlF9sU0RslbXqhFCIVGI/ZGLZhmMtMVfB9cXku/yqeB319pHYGR8g3TDY5NrTHDp3JcXDmY8NQycY
+  kg-chatbot:neo4jPassword:
+    secure: AAABAK4iVHVKg4mOew1EamiWFgyl5aiRqlhj8ybneO7wb90tuHmH9l2oJDZKA1x8K59/5+QRiBQ1MuPQmgjXP0HloFrtngixCsun
+  kg-chatbot:esKey:
+    secure: AAABAIKjE3jxB9m82MtvKshxeCbDnpdQUgm2sItYVqJ7x/HveJwcIHRc/TMNNHcMhvVTGrEVUGuW0Gcsya7YDyaU2f9wquGgrkcBADwXbt5x++SGUkmuC79a61o=
+  kg-chatbot:auth0ClientSecret:
+    secure: AAABALRu2P5ZGIrSRGlhZ52cHMNhYUS8Bh89udu/F83SOHcilVim1EwmmXApytEZOZjQoE71m82BsKuECB+E/lXgcp+dQEnsJDOV6SX1aSqc8b72WRJo1M2Cfa+n6/u2
+  kg-chatbot:bedrockToken:
+    secure: AAABABHXDp0/qApEg73BoVxe7CQ65MF8HfRCu1sL5bcvVCNHgC1dAd+daBYCDzzvfTZ2mfnjl/fF1JDrUPBaW5u6FH20YJMpfL2vOOab3S8+RaSdvNjI3e/vO+tVGMGrUER1EqeHbkdYK3jIaYAG4B99n5fTE80ngakPtp4hX+tKXZ4Ay/2mL8eHuPmkPdBVOy8IbmnLcJm95Xwo4v/O7dCF0Qc=
+  kg-chatbot:auth0OidcClientSecret:
+    secure: AAABAEg6oL/AEH3N+ZXc9y73wO+m//tS6PUwucGxcpIbQqGltDfLvn6jK0CbPL8vnRYky5/IPdR4koZU0HkpePAzbM/D7tiOpcvQSFt7CZcNc/RuZNv3djYu5r3V099o

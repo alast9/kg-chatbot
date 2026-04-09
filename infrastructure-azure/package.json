@@ -1,0 +1,16 @@
+{
+  "name": "kg-chatbot-azure-infrastructure",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "devDependencies": {
+    "@types/node": "^18",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@pulumi/azure-native": "^2",
+    "@pulumi/azuread": "^6.9.0",
+    "@pulumi/command": "^1.2.1",
+    "@pulumi/docker": "^4",
+    "@pulumi/pulumi": "^3"
+  }
+}

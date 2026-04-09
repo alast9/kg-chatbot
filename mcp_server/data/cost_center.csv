@@ -1,0 +1,16 @@
+cost_center_id,cost_center_name,lob_id
+101,Mortgage,1
+102,Personal Loans,1
+103,Deposits & Savings,1
+201,Equity Trading,2
+202,Fixed Income,2
+203,Structured Products,2
+301,Credit Risk,3
+302,Market Risk,3
+303,AML & Compliance,3
+401,Cloud Infrastructure,4
+402,Data Engineering,4
+403,Cybersecurity,4
+501,Financial Reporting,5
+502,Treasury,5
+503,Tax & Audit,5

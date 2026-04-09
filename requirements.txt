@@ -1,0 +1,11 @@
+fastapi==0.135.3
+uvicorn[standard]==0.43.0
+websockets>=12.0
+pymongo[srv]==4.16.0
+redis==7.4.0
+neo4j==6.1.0
+elasticsearch==9.3.0
+elastic-transport==9.2.1
+duckdb==1.5.1
+openai>=1.30.0
+PyJWT[crypto]==2.10.1

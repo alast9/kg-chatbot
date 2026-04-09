@@ -1,0 +1,17 @@
+config:
+  azure-native:location: eastus
+  # ── Azure AI (Claude model on Azure — NOT anthropic.com) ────────────────
+  kg-chatbot-azure:azureAiEndpoint: "https://mychatbotdemio-resource.services.ai.azure.com/models"
+  kg-chatbot-azure:azureAiModel: DeepSeek-R1
+  kg-chatbot-azure:azureAiFoundryGatewayUrl: "https://mychatbotdemio-resource.cognitiveservices.azure.com/"
+  kg-chatbot-azure:neo4jPassword:
+    secure: "AAABANj6Iq32JOH2zyAvC7oT17XFwuABl6X8oh3kEN3rGwNB+RyPVX/mCmkC63iuhWqIujhbVFHXDzTRbqUazO11+1/7mntreP5R"
+  kg-chatbot-azure:esKey:
+    secure: "AAABAK6wWtnHbKNeMB8+JvO6jPHXWLvBnqfJVqlZyD+xkFDakuio3DRC02Xp+cVUV0We9e4Xjkzg3TviE+S/YYC9c3ZtC7pXZ+LgrpfBd3Cj80cPqXc53nBwgXc="
+  kg-chatbot-azure:azureAiApiKey:
+    secure: "AAABAKhQjPWnzLH/4rDAbEgehMNnH0hlwA6RVYH/Iac8tXN5Zqmx6ZcKGkOKGQuAVyxppkpT5z/4W8mrKepeMJM+tOm57wFoEwGVIp+y4QLBlH0iANvzDJrXusKWHGhtBYTsy7o0OsA8tdkRZ32KH5+N9Cw="
+  # ── Snowflake OAuth2 3LO credentials ───────────────────────────────────────
+  kg-chatbot-azure:snowflakeOAuthClientId:
+    secure: "AAABAByHVK+tpJa5Yv9wXC6HkpJJdtRBqyExKOQvmvQQop7aPEksaBjCdFfXfji++Kfcua6cyLJBihia"
+  kg-chatbot-azure:snowflakeOAuthClientSecret:
+    secure: "AAABAIAHgBP1Cs6a2Zvs/Pqs6BrsclkukqdQe6LCZtOjynfMoNStp2QdRBgM6YhGM3gBzX0DBUATJkszhwQbzZZvR9re/et8iHPi3Q=="

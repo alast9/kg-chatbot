@@ -1,0 +1,15 @@
+{
+  "name": "kg-chatbot-infrastructure",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "devDependencies": {
+    "@types/node": "^18",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@pulumi/aws": "^6",
+    "@pulumi/awsx": "^2",
+    "@pulumi/docker": "^4",
+    "@pulumi/pulumi": "^3"
+  }
+}

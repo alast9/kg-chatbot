@@ -119,6 +119,70 @@ def create_app(core, mongo, redis, cap_names: list[str]) -> FastAPI:
         log.info("Login: %s", user_session.email)
         return response
 
+    # ── Dremio OAuth (authorization_code flow) ────────────────────────────────
+
+    @app.get("/auth/dremio/connect")
+    async def dremio_connect(request: Request, code: str = None, error: str = None):
+        """
+        Dual-purpose endpoint:
+          GET /auth/dremio/connect          → redirect to Dremio OAuth authorize URL
+          GET /auth/dremio/connect?code=... → exchange code, store token, redirect to /
+        """
+        from auth.dremio_oauth import authorize_url, exchange_code, is_configured
+
+        s = _get_session(request)
+        if not s:
+            return RedirectResponse("/auth/login", status_code=302)
+
+        if error:
+            return HTMLResponse(
+                f"<h2>Dremio auth failed</h2><p>{error}</p>"
+                f"<p><a href='/'>Back to chatbot</a></p>", status_code=400)
+
+        if code:
+            # Callback — exchange code for token
+            if not is_configured():
+                return HTMLResponse(
+                    "<h2>Dremio OAuth not configured</h2>"
+                    "<p>Set DREMIO_OAUTH_CLIENT_ID and DREMIO_OAUTH_CLIENT_SECRET.</p>",
+                    status_code=500)
+            try:
+                token, expires_at = await asyncio.to_thread(exchange_code, code)
+                s.dremio_token             = token
+                s.dremio_token_expires_at  = expires_at
+                log.info("Dremio OAuth connected: %s", s.email)
+                return RedirectResponse("/", status_code=302)
+            except Exception as e:
+                log.error("Dremio token exchange failed: %s", e)
+                return HTMLResponse(
+                    f"<h2>Dremio auth error</h2><p>{e}</p>"
+                    f"<p><a href='/auth/dremio/connect'>Try again</a></p>", status_code=500)
+
+        # No code — initiate OAuth flow
+        if not is_configured():
+            return HTMLResponse(
+                "<h2>Dremio OAuth not configured</h2>"
+                "<p>Set DREMIO_OAUTH_CLIENT_ID and DREMIO_OAUTH_CLIENT_SECRET, "
+                "or set DREMIO_PAT for service-account access.</p>",
+                status_code=500)
+        url = authorize_url()
+        return RedirectResponse(url, status_code=302)
+
+    @app.get("/auth/dremio/status")
+    async def dremio_status(request: Request):
+        """Return whether the session has a valid Dremio OAuth token."""
+        s = _get_session(request)
+        if not s:
+            return JSONResponse({"connected": False, "reason": "not logged in"}, status_code=401)
+        import os as _os
+        pat_available = bool(_os.getenv("DREMIO_PAT"))
+        connected = bool(s.dremio_token) and time.time() < s.dremio_token_expires_at
+        return JSONResponse({
+            "connected": connected or pat_available,
+            "oauth": connected,
+            "pat_fallback": pat_available and not connected,
+        })
+
     # ── Snowflake SSO status (3LO replaced by Entra External OAuth) ──────────
 
     @app.get("/auth/snowflake/status")
@@ -207,6 +271,8 @@ def create_app(core, mongo, redis, cap_names: list[str]) -> FastAPI:
         _inject_snowflake_token(core, user_session.snowflake_token,
                                 user_session.snowflake_token_expires_at,
                                 user_session.refresh_token)
+        _inject_dremio_token(core, user_session.dremio_token,
+                             user_session.dremio_token_expires_at)
 
         chat_session = _get_chat_session(
             user_session.chat_session_id or chat_id)
@@ -286,6 +352,13 @@ def _inject_snowflake_token(core: Any, token: str, expires_at: float,
     for cap in core._caps:
         if cap.name == "snowflake" and hasattr(cap, "set_snowflake_token"):
             cap.set_snowflake_token(token, expires_at, refresh_token)
+
+
+def _inject_dremio_token(core: Any, token: str, expires_at: float) -> None:
+    """Give the Dremio capability the OAuth token from /auth/dremio/connect."""
+    for cap in core._caps:
+        if cap.name == "dremio" and hasattr(cap, "set_dremio_token"):
+            cap.set_dremio_token(token, expires_at)
 
 
 def _ask_with_events(core, session, question, send_coro, loop, user_id: str = ""):

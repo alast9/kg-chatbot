@@ -128,51 +128,14 @@ const storageConnStr = pulumi.interpolate`DefaultEndpointsProtocol=https;Account
 
 // ══════════════════════════════════════════════════════════════════════════════
 // COSMOS DB FOR MONGODB (chat history)
-// Serverless — pay per RU, no minimum cost.
+// NOTE: Cosmos DB provisioning failed in East US due to serverless capacity limits.
+// Removed from Pulumi management 2026-04-09. The chatbot falls back to in-memory
+// session history gracefully when MONGO_URI is not set.
+// To restore: uncomment the block below, set mongoUri to the derived connection string,
+// and re-run pulumi up from a region with serverless capacity (e.g. West US 2).
 // ══════════════════════════════════════════════════════════════════════════════
 
-const cosmosAccount = new azure_native.documentdb.DatabaseAccount(n("cosmos"), {
-    resourceGroupName:        rg.name,
-    accountName:              n("cosmos"),
-    location,
-    kind:                     "MongoDB",
-    databaseAccountOfferType: azure_native.documentdb.DatabaseAccountOfferType.Standard,
-    apiProperties:            { serverVersion: "7.0" },
-    capabilities:             [{ name: "EnableServerless" }, { name: "EnableMongo" }],
-    consistencyPolicy:        { defaultConsistencyLevel: "Session" },
-    locations:                [{ locationName: location, failoverPriority: 0, isZoneRedundant: false }],
-    tags: { Stack: stack },
-});
-
-const cosmosDb = new azure_native.documentdb.MongoDBResourceMongoDBDatabase(n("cosmos-db"), {
-    resourceGroupName: rg.name,
-    accountName:       cosmosAccount.name,
-    databaseName:      "chatbot",
-    resource:          { id: "chatbot" },
-});
-
-new azure_native.documentdb.MongoDBResourceMongoDBCollection(n("cosmos-col"), {
-    resourceGroupName: rg.name,
-    accountName:       cosmosAccount.name,
-    databaseName:      cosmosDb.name,
-    collectionName:    "conversations",
-    resource: {
-        id:      "conversations",
-        indexes: [{ key: { keys: ["session_id"] } }, { key: { keys: ["_ts"] }, options: { expireAfterSeconds: 7776000 } }],
-    },
-});
-
-// Chain the key lookup off the account ID (which is unknown during preview for new/replaced
-// resources), so listDatabaseAccountKeys is only invoked during an actual deploy when the
-// account is guaranteed to exist and be in a healthy state.
-const cosmosKeys = cosmosAccount.id.apply(_ =>
-    azure_native.documentdb.listDatabaseAccountKeysOutput({
-        resourceGroupName: rg.name,
-        accountName:       cosmosAccount.name,
-    })
-);
-
-const mongoUri = pulumi.interpolate`mongodb://${cosmosAccount.name}:${cosmosKeys.primaryMasterKey}@${cosmosAccount.name}.mongo.cosmos.azure.com:10255/?ssl=true&retrywrites=false&maxIdleTimeMS=120000&appName=@${cosmosAccount.name}@`;
+// MONGO_URI not wired — Cosmos DB not provisioned; session.py falls back gracefully
 
 // ══════════════════════════════════════════════════════════════════════════════
 // CONTAINER APPS ENVIRONMENT
@@ -414,10 +377,11 @@ const chatbotApp2 = new azure_native.app.ContainerApp(n("app"), {
         secrets: [
             { name: "acr-password",         value: acrPassword },
             { name: "entra-client-secret",  value: chatbotSecret.value },
-            { name: "mongo-uri",            value: mongoUri },
+            // mongo-uri removed — Cosmos DB not provisioned; session.py falls back to in-memory
             { name: "neo4j-password",       value: neo4jPassword },
             { name: "es-key",               value: esKey },
             { name: "azure-ai-api-key",     value: azureAiApiKey },
+            { name: "dremio-pat",           value: cfg.requireSecret("DREMIO_PAT") },
         ],
     },
     template: {
@@ -463,10 +427,16 @@ const chatbotApp2 = new azure_native.app.ContainerApp(n("app"), {
                 { name: "SNOWFLAKE_ENTRA_APP_ID", value: "5daaa11c-aff1-48ac-b265-d6fc645bc669" },
                 { name: "SNOWFLAKE_ACCOUNT",      value: "XJSKMFC-WQC92044" },
 
+                // ── Dremio Cloud (REST API + OAuth) ────────────────────────
+                // PAT is the service-account fallback; per-user OAuth via /auth/dremio/connect
+                { name: "DREMIO_PROJECT_ID",           value: "dea2a74c-2f8a-4eef-8d40-c87db48d79ff" },
+                { name: "DREMIO_PAT",                  secretRef: "dremio-pat" },
+                // DREMIO_OAUTH_CLIENT_ID/SECRET: set when OAuth app secret is available
+                // { name: "DREMIO_OAUTH_CLIENT_ID",   value: "dc9160c2-76aa-4fab-9bc0-cd1bebe6da13" },
+                // { name: "DREMIO_OAUTH_CLIENT_SECRET", secretRef: "dremio-oauth-secret" },
+
                 // ── Data backends ──────────────────────────────────────────
-                { name: "MONGO_DB",                    value: "chatbot" },
-                { name: "MONGO_COL",                   value: "conversations" },
-                { name: "MONGO_URI",                   secretRef: "mongo-uri" },
+                // MONGO_URI not set — Cosmos DB not provisioned; session.py falls back gracefully
                 { name: "NEO4J_URI",                   value: "neo4j+s://afc6eb9c.databases.neo4j.io" },
                 { name: "NEO4J_USER",                  value: "neo4j" },
                 { name: "NEO4J_PASSWORD",              secretRef: "neo4j-password" },
@@ -602,53 +572,21 @@ const storageConn = new mlv2025.WorkspaceConnection(n("agent-storage-conn"), {
     },
 });
 
-// WorkspaceConnection: Snowflake MCP (OAuth2 — 3LO authorization code)
-// User's Entra ID identity flows through the Agent Service to Snowflake.
-const snowflakeMcpConn = new mlv2025.WorkspaceConnection(n("snowflake-mcp-conn"), {
-    resourceGroupName: rg.name,
-    workspaceName:     aiProject.name,
-    connectionName:    "snowflake-mcp",
-    properties: {
-        authType:      "OAuth2",
-        category:      "Snowflake",
-        target:        "https://XJSKMFC-WQC92044.snowflakecomputing.com/api/v2/databases/DEMO_DB/schemas/PUBLIC/mcp-servers/DEMO_MCP_SERVER",
-        isSharedToAll: false,
-        credentials: {
-            clientId:     snowflakeOAuthClientId,
-            clientSecret: snowflakeOAuthClientSecret,
-            authUrl:      "https://XJSKMFC-WQC92044.snowflakecomputing.com/oauth/authorize",
-        },
-        metadata: {
-            tokenUrl:     "https://XJSKMFC-WQC92044.snowflakecomputing.com/oauth/token-request",
-            issuer:       "https://XJSKMFC-WQC92044.snowflakecomputing.com",
-            responseType: "code",
-        },
-    },
-});
-
-// CapabilityHost: enables Azure AI Agent Service on the project
-// Post-deploy: configure Entra ID inbound OIDC via Azure AI Projects SDK:
-//   discovery_url: https://login.microsoftonline.com/{tenantId}/v2.0/.well-known/openid-configuration
-//   allowed_clients: [chatbotApp.clientId]
-const capHost = new azure_native.machinelearningservices.CapabilityHost(n("agent-cap"), {
-    resourceGroupName: rg.name,
-    workspaceName:     aiProject.name,
-    name:              "default",
-    capabilityHostProperties: {
-        capabilityHostKind: "Agents",
-    },
-});
+// NOTE: Snowflake MCP WorkspaceConnection and CapabilityHost removed 2026-04-09.
+// Snowflake is now accessed directly via Entra ID External OAuth + SQL REST API
+// (SNOWFLAKE_BACKEND=api in capabilities/snowflake.py). No Foundry Agent needed.
+// To restore when Snowflake MCP bug is fixed: add back snowflakeMcpConn and capHost,
+// set SNOWFLAKE_BACKEND=mcp, and re-run pulumi up.
 
 // ── Exports ────────────────────────────────────────────────────────────────
 export const url                    = chatbotBaseUrl;
 export const acrLoginServer         = registry.loginServer;
 export const storageAccountName     = storageAccount.name;
-export const cosmosAccountName      = cosmosAccount.name;
+// cosmosAccountName removed — Cosmos DB not managed by Pulumi (provisioning failed)
 export const resourceGroupName      = rg.name;
 export const aiFoundryProjectName   = aiProject.name;
 export const aiFoundryAgentsEndpoint = agentsEndpointUri;
 export const aiFoundryHubName       = aiHub.name;
-export const snowflakeMcpConnName   = snowflakeMcpConn.name;
 
 // Entra ID outputs (useful for post-deploy configuration)
 export const entraTenantId          = tenantId;

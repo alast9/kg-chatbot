@@ -15,3 +15,6 @@ config:
     secure: "AAABAByHVK+tpJa5Yv9wXC6HkpJJdtRBqyExKOQvmvQQop7aPEksaBjCdFfXfji++Kfcua6cyLJBihia"
   kg-chatbot-azure:snowflakeOAuthClientSecret:
     secure: "AAABAIAHgBP1Cs6a2Zvs/Pqs6BrsclkukqdQe6LCZtOjynfMoNStp2QdRBgM6YhGM3gBzX0DBUATJkszhwQbzZZvR9re/et8iHPi3Q=="
+  kg-chatbot-azure:DREMIO_PAT:
+    secure: AAABAKmrD3U8H3MZnadBdpWpqNl3vAqm9G+59tqDmhTqAtsEAYevQ7nQ5sLCb8MrPmpNNA/O8HdLctao4jq5Bi7oLNZWg+QsrefGZ59D95HvQcBYC1CKia2uFIdAS5z5
+  kg-chatbot-azure:DREMIO_PROJECT_ID: dea2a74c-2f8a-4eef-8d40-c87db48d79ff

@@ -1,65 +1,159 @@
 """
-capabilities/dremio.py — Dremio capability via Azure AI Foundry Gateway + Auth0 SSO
-====================================================================================
+capabilities/dremio.py — Dremio Cloud capability via REST API + OAuth
+======================================================================
 Architecture:
   chatbot tool call
     → DremioCapability.handle_tool()
-      → AzureAIGatewayClient.call_tool()   (JSON-RPC 2.0 over HTTPS / MCP 2025-11-25)
-        ← Auth0 Bearer token (client_credentials, auto-refreshed, 3LO)
-        → Azure AI Foundry Agent Service Gateway
-          → Dremio MCP server
-            → Dremio Cloud SQL engine
+      → _exec_sql()  (POST /v0/projects/{project_id}/sql + poll)
+        ← Per-user Dremio OAuth token (from /auth/dremio/connect flow)
+           OR service-account PAT (DREMIO_PAT env var, fallback)
 
-The gateway speaks JSON-RPC 2.0 (MCP protocol):
-  POST /mcp  {"jsonrpc":"2.0","method":"tools/call",
-              "params":{"name":"RunSqlQuery","arguments":{"query":"SELECT..."}}}
+Auth:
+  Two modes (automatic fallback):
+    1. Per-user OAuth — user clicks "Connect Dremio" in UI → Dremio OAuth login
+       → token stored in UserSession.dremio_token
+    2. Service account — DREMIO_PAT env var (PAT), shared by all users
 
-The Auth0 token is fetched once and cached until 60s before expiry.
-All tool calls reuse the cached token; 401 responses trigger a forced refresh.
+OAuth endpoints (Dremio Cloud org-level OAuth App):
+  Authorize:  https://app.dremio.cloud/oauth2/authorize
+  Token:      https://api.dremio.cloud/v0/projects/{project_id}/oauth2/token
+  Redirect:   <APP_BASE_URL>/auth/dremio/connect   (configured in Dremio OAuth app)
 
-For dremio_nl_query (natural language → SQL → result):
-  Step 1: Claude on Azure AI generates SQL from question + schema context
-  Step 2: call_tool("RunSqlQuery", {"query": sql}) via Azure AI Foundry gateway
+SQL execution:
+  1. POST /v0/projects/{project_id}/sql  → {"id": job_id}
+  2. Poll GET /v0/projects/{project_id}/job/{job_id} until jobState == COMPLETED
+  3. GET /v0/projects/{project_id}/job/{job_id}/results  → rows
+
+Note: Engine cold-start takes ~40s on Dremio Cloud serverless.
+All columns returned as JSON-native types (INTEGER, VARCHAR, DOUBLE, etc.)
+
+To add SSO (like Snowflake): configure Entra ID as SAML/OIDC IdP in Dremio
+Cloud org settings, then exchange the Entra ID token for a Dremio token silently
+at chatbot login (eliminating the explicit /auth/dremio/connect step).
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import threading
+import time
+import urllib.error
+import urllib.request
 from typing import Any
 
-import openai
-
 from .base import Capability
-from auth.azure_ai_gateway import AzureAIGatewayClient, get_gateway_client
-from auth.sso import EntraTokenManager, get_token_manager
 
 log = logging.getLogger("cap.dremio")
 
-# LLM on Azure AI (for dremio_nl_query SQL generation step only)
-AZURE_AI_ENDPOINT = os.getenv("AZURE_AI_ENDPOINT", "")
-AZURE_AI_API_KEY  = os.getenv("AZURE_AI_API_KEY",  "")
-AZURE_AI_MODEL    = os.getenv("AZURE_AI_MODEL",    "DeepSeek-R1")
+DREMIO_PROJECT_ID = os.getenv("DREMIO_PROJECT_ID", "dea2a74c-2f8a-4eef-8d40-c87db48d79ff")
+DREMIO_PAT        = os.getenv("DREMIO_PAT", "")   # service-account fallback
+DREMIO_BASE_URL   = f"https://api.dremio.cloud/v0/projects/{DREMIO_PROJECT_ID}"
 
-_llm_client = openai.OpenAI(
-    base_url=AZURE_AI_ENDPOINT or None,
-    api_key=AZURE_AI_API_KEY or "placeholder",
-    default_query={"api-version": "2024-05-01-preview"},
-)
+_JOB_POLL_INTERVAL = 2    # seconds between job status polls
+_JOB_TIMEOUT       = 120  # seconds before giving up
 
+
+# ── REST API helpers ──────────────────────────────────────────────────────────
+
+def _headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type":  "application/json",
+        "Accept":        "application/json",
+    }
+
+
+def _get(url: str, token: str) -> dict:
+    req = urllib.request.Request(url, headers=_headers(token))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        body = ""
+        try: body = e.read().decode()[:400]
+        except Exception: pass
+        raise RuntimeError(f"Dremio GET {e.code}: {body}")
+
+
+def _post(url: str, token: str, body: dict) -> dict:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers=_headers(token),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        body_text = ""
+        try: body_text = e.read().decode()[:400]
+        except Exception: pass
+        raise RuntimeError(f"Dremio POST {e.code}: {body_text}")
+
+
+def _exec_sql(token: str, sql: str, timeout: int = _JOB_TIMEOUT) -> dict:
+    """
+    Submit SQL job, poll until complete, return rows.
+    Handles Dremio Cloud serverless cold-start (~40s for first query).
+    Returns {"rows": [...], "row_count": N, "columns": [...], "job_id": "..."}
+    """
+    # Submit job
+    resp = _post(f"{DREMIO_BASE_URL}/sql", token, {"sql": sql})
+    job_id = resp.get("id")
+    if not job_id:
+        raise RuntimeError(f"Dremio SQL submission failed: {resp}")
+
+    log.info("[Dremio] Job submitted: %s  SQL: %s", job_id, sql[:80])
+
+    # Poll for completion
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(_JOB_POLL_INTERVAL)
+        status = _get(f"{DREMIO_BASE_URL}/job/{job_id}", token)
+        state = status.get("jobState", "")
+        log.debug("[Dremio] Job %s state: %s", job_id, state)
+
+        if state == "COMPLETED":
+            break
+        if state in ("FAILED", "CANCELED", "INVALID_STATE"):
+            err = status.get("errorMessage", state)
+            raise RuntimeError(f"Dremio job {state}: {err}")
+        # ENGINE_START / QUEUED / PLANNING / RUNNING — keep polling
+
+    else:
+        raise RuntimeError(f"Dremio job {job_id} timed out after {timeout}s")
+
+    # Fetch results
+    results = _get(f"{DREMIO_BASE_URL}/job/{job_id}/results", token)
+    rows     = results.get("rows", [])
+    schema   = results.get("schema", [])
+    columns  = [c["name"] for c in schema]
+
+    return {
+        "rows":      rows,
+        "row_count": results.get("rowCount", len(rows)),
+        "columns":   columns,
+        "job_id":    job_id,
+    }
+
+
+# ── Capability ────────────────────────────────────────────────────────────────
 
 class DremioCapability(Capability):
     """
-    Dremio Cloud natural language query capability.
-    All data access goes through the Azure AI Foundry Gateway (Auth0 SSO / 3LO).
+    Dremio Cloud natural language + SQL capability.
+    Uses per-user OAuth token when available, falls back to service-account PAT.
     """
     name = "dremio"
-    description = "Natural language queries against Dremio Cloud customer360 data (via Azure AI Foundry Gateway + Auth0)"
+    description = "SQL queries against Dremio Cloud customer360 dataset"
 
-    # Pre-built schema catalog (discovered via MCP SearchTableAndViews earlier)
+    # Schema catalog — injected into LLM system prompt
     SCHEMA_CATALOG = """\
 DREMIO CLOUD — dremio_samples.customer360
-  Gateway: Azure AI Foundry Agent Service (MCP 2025-11-25)
-  Auth:    Auth0 client_credentials → Bearer token → Azure AI Foundry inbound auth (3LO)
+  Project: dea2a74c-2f8a-4eef-8d40-c87db48d79ff
+  Auth:    per-user OAuth (preferred) or service-account PAT (fallback)
 
   TABLE: "dremio_samples"."customer360"."customer"
     customer_id: VARCHAR  |  full_name: VARCHAR  |  address: VARCHAR
@@ -86,199 +180,108 @@ DREMIO CLOUD — dremio_samples.customer360
     rating: BIGINT (1-5)  |  returned: BOOLEAN
 
   KEY RELATIONSHIPS:
-    customer.customer_id       → orders.customer_id
-    orders.order_id            → order_line_items.order_id
+    customer.customer_id        → orders.customer_id
+    orders.order_id             → order_line_items.order_id
     order_line_items.product_id → product.product_id
     order_line_items.line_item_id → reviews_and_returned_items.line_item_id
 
-  DREMIO SQL RULES: quote reserved words with double quotes — "count", "month", "day", "year", "table"
-  Use DATE_TRUNC for time bucketing. Use OVER() for window functions."""
+  DREMIO SQL RULES:
+    - Quote reserved words: "count", "month", "day", "year", "table"
+    - Full table path: "dremio_samples"."customer360"."<table>"
+    - Use DATE_TRUNC for time bucketing
+    - Use OVER() for window functions"""
 
-    def __init__(self,
-                 gateway: AzureAIGatewayClient | None = None,
-                 token_manager: EntraTokenManager | None = None):
-        self._gateway    = gateway or get_gateway_client()
-        self._auth       = token_manager or get_token_manager()
-        self._user_token: str = ""   # set per-request from user's OAuth session
-        self._lock       = __import__("threading").Lock()
+    def __init__(self):
+        self._dremio_token:            str   = ""
+        self._dremio_token_expires_at: float = 0.0
+        self._lock = threading.Lock()
 
-    def set_user_token(self, token: str) -> None:
-        """Inject user's delegated access_token for Dremio data access control."""
+    def set_dremio_token(self, token: str, expires_at: float) -> None:
+        """Inject per-user Dremio OAuth token (called from web.py per WebSocket)."""
         with self._lock:
-            self._user_token = token
+            self._dremio_token            = token
+            self._dremio_token_expires_at = expires_at
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
     def startup_check(self) -> tuple[bool, str]:
-        auth_ok, auth_msg = self._auth.startup_check()
-        if not auth_ok:
-            return False, auth_msg
-        gw_ok, gw_msg = self._gateway.startup_check()
-        return gw_ok, f"{auth_msg} | {gw_msg}"
+        if not DREMIO_PAT and not os.getenv("DREMIO_OAUTH_CLIENT_ID"):
+            return False, "DREMIO_PAT or DREMIO_OAUTH_CLIENT_ID must be set"
+        mode = "PAT" if DREMIO_PAT else "OAuth"
+        return True, f"Dremio Cloud ready (project={DREMIO_PROJECT_ID}, auth={mode})"
 
     # ── Capability interface ──────────────────────────────────────────────────
 
     def static_context(self) -> str:
         return self.SCHEMA_CATALOG
 
+    def dynamic_fragment(self, user_id: str) -> str:
+        return ""
+
     def system_fragment(self) -> str:
         return """\
-DREMIO CLOUD DATA QUERIES (via Azure AI Foundry Gateway + Auth0 SSO / 3LO)
-  Use dremio_nl_query for natural language questions about customers, orders, products, revenue, returns.
-  Use dremio_run_sql when you have a specific SQL query to run directly.
-  Use dremio_search_tables to discover available tables or verify schemas.
-  Always quote Dremio SQL reserved words: "count", "month", "day", "year", "table".
-  Table prefix: "dremio_samples"."customer360"."<table_name>"."""
+DREMIO CLOUD DATA QUERIES
+  Use dremio_run_sql to query customer360 data (customers, orders, products, reviews).
+  The schema is provided in context — use exact table and column names.
+  Always quote Dremio reserved words with double quotes: "count", "month", "day", "year", "table".
+  Full table path: "dremio_samples"."customer360"."<table>".
+  Note: first query may take ~40s while Dremio engine warms up — inform the user if slow.
+  If a query returns an auth error, ask the user to connect Dremio at /auth/dremio/connect."""
 
     def tools(self) -> list[dict]:
         return [
             {
-                "name": "dremio_nl_query",
-                "description": (
-                    "Answer a natural language question by generating and running SQL "
-                    "against Dremio customer360 via AgentCore. Use for: 'top 5 customers by revenue', "
-                    "'monthly order trend', 'most returned products', 'average order value by state', "
-                    "'membership tier breakdown'. Claude generates the SQL; gateway executes it."
-                ),
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "question": {"type": "string", "description": "Natural language question"},
-                    },
-                    "required": ["question"],
-                },
-            },
-            {
                 "name": "dremio_run_sql",
                 "description": (
-                    "Execute a specific SQL SELECT via the AgentCore gateway. "
-                    "Quote reserved words: \"count\", \"month\", \"day\"."
+                    "Execute a SQL SELECT against Dremio Cloud customer360. "
+                    "Use for: top customers by revenue, monthly order trends, "
+                    "most returned products, average order value by state, membership breakdown. "
+                    "Note: first query may take ~40s while the Dremio engine starts."
                 ),
                 "input_schema": {
                     "type": "object",
                     "properties": {
-                        "query":       {"type": "string", "description": "SQL SELECT query"},
-                        "description": {"type": "string", "description": "What this computes"},
+                        "sql":         {"type": "string", "description": "SQL SELECT to execute"},
+                        "description": {"type": "string", "description": "What this query computes"},
                     },
-                    "required": ["query"],
+                    "required": ["sql"],
                 },
-            },
-            {
-                "name": "dremio_search_tables",
-                "description": "Semantic search to discover Dremio tables and views by topic.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"],
-                },
-            },
-            {
-                "name": "dremio_get_lineage",
-                "description": "Get data lineage for a Dremio table or view.",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {"table_name": {"type": "string"}},
-                    "required": ["table_name"],
-                },
-            },
-            {
-                "name": "dremio_system_tables",
-                "description": "List useful Dremio system tables for cluster analysis.",
-                "input_schema": {"type": "object", "properties": {}, "required": []},
             },
         ]
 
-    # ── Tool execution ────────────────────────────────────────────────────────
-
     def handle_tool(self, name: str, inputs: dict) -> Any:
-        if name == "dremio_nl_query":
-            return self._nl_query(inputs["question"])
-        elif name == "dremio_run_sql":
-            return self._run_sql(inputs["query"], inputs.get("description", ""))
-        elif name == "dremio_search_tables":
-            return self._call("SearchTableAndViews", {"query": inputs["query"]})
-        elif name == "dremio_get_lineage":
-            return self._call("GetTableOrViewLineage", {"table_name": inputs["table_name"]})
-        elif name == "dremio_system_tables":
-            return self._call("GetUsefulSystemTableNames", {})
+        if name == "dremio_run_sql":
+            return self._run_sql(inputs["sql"], inputs.get("description", ""))
         return None
 
-    # ── Gateway helpers ───────────────────────────────────────────────────────
+    # ── Internal helpers ──────────────────────────────────────────────────────
 
-    def _call(self, mcp_tool: str, arguments: dict) -> dict:
-        """Call a Dremio MCP tool via the AgentCore gateway.
-        Uses user's delegated token when set (for per-user data access control),
-        falls back to M2M token for background/system calls.
-        """
+    def _token(self) -> str:
+        """Return the best available token: per-user OAuth > service PAT."""
         with self._lock:
-            user_tok = self._user_token
+            tok = self._dremio_token
+            exp = self._dremio_token_expires_at
+
+        # Per-user token valid
+        if tok and time.time() < exp:
+            return tok
+
+        # Fall back to PAT
+        if DREMIO_PAT:
+            return DREMIO_PAT
+
+        raise RuntimeError(
+            "Dremio not connected — please visit /auth/dremio/connect to authorise "
+            "or set DREMIO_PAT for service-account access")
+
+    def _run_sql(self, sql: str, description: str = "") -> dict:
+        if description:
+            log.info("[Dremio] SQL (%s): %s", description, sql[:120])
         try:
-            if user_tok:
-                # Temporarily override the gateway's auth with user token
-                result = self._gateway.call_tool_with_token(mcp_tool, arguments, user_tok)
-            else:
-                result = self._gateway.call_tool(mcp_tool, arguments)
-            log.info("[Dremio] %s → %s", mcp_tool, str(result)[:80])
+            token  = self._token()
+            result = _exec_sql(token, sql)
+            result["executed_sql"] = sql
             return result
         except RuntimeError as e:
-            log.error("[Dremio] %s failed: %s", mcp_tool, e)
-            return {"error": str(e)}
-
-    def _run_sql(self, query: str, description: str = "") -> dict:
-        """Execute SQL via the gateway RunSqlQuery tool."""
-        if description:
-            log.info("[Dremio] SQL (%s): %s", description, query[:80])
-        result = self._call("RunSqlQuery", {"query": query})
-        result["executed_sql"] = query
-        return result
-
-    def _nl_query(self, question: str) -> dict:
-        """
-        Natural language → SQL (via Claude on Azure AI) → result (via Azure AI Foundry gateway).
-
-        Step 1: Claude on Azure AI generates SQL from question + pre-built schema catalog.
-                Pure LLM call — no gateway involved.
-        Step 2: Execute via Azure AI Foundry gateway with Auth0 auth (3LO).
-                Token auto-refreshed on expiry.
-        """
-        # ── Step 1: Generate SQL via Claude on Azure AI ───────────────────────
-        prompt = f"""\
-Given this Dremio schema:
-{self.SCHEMA_CATALOG}
-
-Write a SQL query to answer: "{question}"
-
-Rules:
-- Quote reserved words: "count", "month", "day", "year", "table"
-- Full table names: "dremio_samples"."customer360"."<table>"
-- Return ONLY the SQL query. No explanation, no markdown fences.
-- Add LIMIT 50 unless the question asks for aggregations or full counts."""
-
-        try:
-            azure_resp = _llm_client.chat.completions.create(
-                model=AZURE_AI_MODEL,
-                max_tokens=1024,
-                messages=[{"role": "user", "content": prompt}],
-            )
-        except Exception as e:
-            return {"error": f"SQL generation failed: {e}", "question": question}
-
-        content = azure_resp.choices[0].message.content or ""
-        # Strip DeepSeek-R1 thinking blocks
-        import re as _re
-        content = _re.sub(r"<think>.*?</think>", "", content, flags=_re.DOTALL)
-        sql = content.strip()
-
-        # Strip accidental markdown fences
-        if "```" in sql:
-            sql = "\n".join(
-                l for l in sql.split("\n") if not l.strip().startswith("```")
-            ).strip()
-
-        log.info("[Dremio] NL→SQL for %r: %s", question[:50], sql[:120])
-
-        # ── Step 2: Execute via AgentCore gateway ─────────────────────────────
-        result = self._run_sql(sql, description=f"NL: {question[:60]}")
-        result["question"]      = question
-        result["generated_sql"] = sql
-        return result
+            log.error("[Dremio] SQL failed: %s", e)
+            return {"error": str(e), "executed_sql": sql}

@@ -93,6 +93,8 @@ class UserSession:
     refresh_token:    str = ""
     snowflake_token:  str = ""             # Entra-issued token for Snowflake External OAuth
     snowflake_token_expires_at: float = 0.0
+    dremio_token:     str = ""             # Dremio OAuth access token (from /auth/dremio/connect)
+    dremio_token_expires_at: float = 0.0
     created_at:       float = field(default_factory=time.time)
     expires_at:       float = 0.0
     chat_session_id:  str = ""

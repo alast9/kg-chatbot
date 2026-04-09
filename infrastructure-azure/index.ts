@@ -176,9 +176,14 @@ const clientConfig = azure_native.authorization.getClientConfigOutput();
 const tenantId     = clientConfig.tenantId;
 
 // Identifier URI for the KB MCP server app registration.
-// Must include tenant ID to satisfy Entra ID's app policy
-// (policy requires: tenant verified domain, tenant ID, or app ID).
+// Must include tenant ID to satisfy Entra ID's app policy.
 const mcpApiUri = pulumi.interpolate`api://${tenantId}/kg-mcp-server-${stack}`;
+
+// Audience for MCP token validation.
+// Entra issues v1.0-format tokens (accessTokenAcceptedVersion=null) whose
+// aud claim is the app's client ID (GUID), not the identifier URI.
+// Both chatbot and MCP server must use this value for audience validation.
+const mcpTokenAudience = mcpServerApp.clientId;  // "34e2c137-cb3b-43db-911f-1db9f2200b85"
 
 // Default Entra ID domain (e.g. contoso.onmicrosoft.com).
 // getDomains requires Directory.Read.All; fall back to config or the known value
@@ -335,7 +340,7 @@ const mcpApp = new azure_native.app.ContainerApp(mn("app"), {
                 { name: "AZURE_STORAGE_CONNECTION_STRING", secretRef: "storage-conn-str" },
                 // ── Entra ID JWT validation (2LO) ──────────────────────────
                 { name: "ENTRA_TENANT_ID",   value: tenantId },
-                { name: "ENTRA_MCP_API_URI", value: mcpApiUri },
+                { name: "ENTRA_MCP_API_URI", value: mcpTokenAudience },
             ],
         }],
         scale: { minReplicas: 1, maxReplicas: 1 },

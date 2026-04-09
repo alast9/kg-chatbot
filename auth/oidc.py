@@ -74,6 +74,10 @@ SNOWFLAKE_ENTRA_APP_ID = os.getenv(
     "SNOWFLAKE_ENTRA_APP_ID", "5daaa11c-aff1-48ac-b265-d6fc645bc669")
 SNOWFLAKE_ENTRA_SCOPE  = f"api://{SNOWFLAKE_ENTRA_APP_ID}/session:role:DEMO_READER offline_access"
 
+# Dremio External Token Provider — chatbot app exposes Dremio.Access scope.
+# Entra issues a token with aud = ENTRA_CLIENT_ID, which Dremio validates.
+DREMIO_ENTRA_SCOPE = f"api://{ENTRA_CLIENT_ID}/Dremio.Access offline_access"
+
 SESSION_TTL  = int(os.getenv("SESSION_TTL", "28800"))   # 8 hours
 COOKIE_NAME  = "chatbot_session"
 
@@ -235,6 +239,36 @@ def exchange_snowflake_token(refresh_token: str) -> tuple[str, float]:
         return "", 0.0
 
 
+def exchange_dremio_entra_token(refresh_token: str) -> tuple[str, float]:
+    """
+    Use the user's Entra ID refresh_token to get an access token scoped for
+    the chatbot app's Dremio.Access scope (api://<ENTRA_CLIENT_ID>/Dremio.Access).
+    Dremio's External Token Provider validates this token — aud = ENTRA_CLIENT_ID.
+    Returns (dremio_access_token, expires_at_unix_timestamp).
+    """
+    if not DREMIO_ENTRA_SCOPE or not ENTRA_CLIENT_ID:
+        return "", 0.0
+    try:
+        tokens = _post_form(ENTRA_TOKEN_URL, {
+            "grant_type":    "refresh_token",
+            "client_id":     ENTRA_CLIENT_ID,
+            "client_secret": ENTRA_CLIENT_SECRET,
+            "refresh_token": refresh_token,
+            "scope":         DREMIO_ENTRA_SCOPE,
+        })
+        if "error" in tokens:
+            log.warning("Dremio Entra token exchange error: %s — %s",
+                        tokens["error"], tokens.get("error_description", ""))
+            return "", 0.0
+        tok = tokens.get("access_token", "")
+        exp = time.time() + tokens.get("expires_in", 3600) - 60   # 60s buffer
+        log.info("Dremio Entra token obtained (expires_in=%ds)", tokens.get("expires_in", 0))
+        return tok, exp
+    except Exception as e:
+        log.warning("Dremio Entra token exchange failed: %s", e)
+        return "", 0.0
+
+
 # ── Server-side session store ─────────────────────────────────────────────────
 
 class SessionStore:
@@ -372,9 +406,10 @@ class OIDCFlow:
         except Exception as e:
             raise RuntimeError(f"JWT verification failed: {e}")
 
-        # Silently exchange the refresh_token for a Snowflake-scoped token.
-        # This eliminates the separate /auth/snowflake/connect step entirely.
-        sf_token, sf_expires = exchange_snowflake_token(refresh_token) if refresh_token else ("", 0.0)
+        # Silently exchange the refresh_token for data-platform tokens at login.
+        # This eliminates separate /auth/snowflake and /auth/dremio connect steps.
+        sf_token,  sf_expires  = exchange_snowflake_token(refresh_token)  if refresh_token else ("", 0.0)
+        dremio_tok, dremio_exp = exchange_dremio_entra_token(refresh_token) if refresh_token else ("", 0.0)
 
         session = UserSession(
             session_id       = secrets.token_urlsafe(32),
@@ -390,6 +425,8 @@ class OIDCFlow:
             refresh_token    = refresh_token,
             snowflake_token  = sf_token,
             snowflake_token_expires_at = sf_expires,
+            dremio_token               = dremio_tok,
+            dremio_token_expires_at    = dremio_exp,
             expires_at       = time.time() + min(expires_in, SESSION_TTL),
         )
         self._store.create_session(session)

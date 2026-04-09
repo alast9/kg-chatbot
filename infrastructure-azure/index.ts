@@ -216,6 +216,8 @@ const mcpServerSp = new azuread.ServicePrincipal("kg-mcp-server-sp", {
 const chatbotApp = new azuread.Application("kg-chatbot-app", {
     displayName:    "KG Chatbot",
     signInAudience: "AzureADMyOrg",
+    // NOTE: "Expose an API" (api://a24f5558.../Dremio.Access) is configured manually
+    // in Entra ID portal — Pulumi SP lacks Application.ReadWrite.All to manage it.
     web: {
         redirectUris:  [pulumi.interpolate`${chatbotBaseUrl}/auth/callback`],
         implicitGrant: {

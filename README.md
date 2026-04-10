@@ -297,6 +297,15 @@ and injected directly into the Container App secrets — it never appears in
 
 ---
 
+## Testing
+
+A full test plan covering login, knowledge graph queries, Snowflake, Dremio, and
+multi-turn conversation flows is available here:
+
+📄 [chatbot_test_plan.pdf](chatbot_test_plan.pdf)
+
+---
+
 ## Two Infrastructure Stacks
 
 | Stack | Location | Status | Notes |

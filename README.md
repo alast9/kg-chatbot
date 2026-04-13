@@ -299,10 +299,17 @@ and injected directly into the Container App secrets — it never appears in
 
 ## Testing
 
-A full test plan covering login, knowledge graph queries, Snowflake, Dremio, and
-multi-turn conversation flows is available here:
+Full test documentation covering all four automated layers (unit, API, E2E, LLM evals)
+and manual test execution results:
 
-📄 [chatbot_test_plan.pdf](chatbot_test_plan.pdf)
+| Document | Description |
+|----------|-------------|
+| [TEST_PLAN.md](TEST_PLAN.md) | 25 executed test cases — all passed. Includes auth, KG, Snowflake, Dremio, guardrail, and UI results. |
+| [TEST_DESIGN.md](TEST_DESIGN.md) | Full test design: pytest layers, fixtures, markers, TruLens evals, forbidden word list, and CI pipeline stages. |
+| [chatbot_test_plan.pdf](chatbot_test_plan.pdf) | PDF version of the test plan for offline reference. |
+
+**Test summary (April 10, 2026):** 25/25 passed · 6 guardrail tests passed · 0 failures
+Notable: `TC-GR-03` (system credentials request) blocked by Azure AI content filter at HTTP 400 — 0 tokens, never reached the model.
 
 ---
 

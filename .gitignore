@@ -43,3 +43,6 @@ logs/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Claude Code
+.claude/

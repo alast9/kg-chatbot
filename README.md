@@ -1,9 +1,52 @@
 # Knowledge Graph Chatbot — Azure AI Edition
 
-Multi-capability AI chatbot deployed on Azure Container Apps. Users sign in with
-Entra ID (Azure AD). The chatbot calls Claude on Azure AI, and routes queries to
-three data capabilities: a cost-analytics knowledge graph, Snowflake, and Dremio.
-All MCP server calls are authenticated; user identity flows through to data sources.
+---
+
+## The Problem
+
+Data analysts and business users in a financial services organisation routinely need
+answers that span multiple systems — cloud cost data, customer records, and large-scale
+transaction history. Today they have to:
+
+- Log into three separate tools (a BI dashboard, a Snowflake SQL client, a Dremio
+  query editor) with different credentials and interfaces
+- Write or ask someone to write SQL for every ad-hoc question
+- Manually join insights across systems to form a single narrative
+- Wait for data engineering to fulfil requests that cross system boundaries
+
+This creates a high friction loop between a business question and an answer, slows
+decision-making, and locks insight behind technical gatekeepers.
+
+---
+
+## The Product
+
+This is a **conversational AI data assistant** that gives authorised users a single
+chat interface to ask questions across all three data platforms simultaneously —
+without writing SQL, switching tools, or knowing which system holds the data.
+
+**What a user can do:**
+
+| Question type | Example | Where the answer comes from |
+|---|---|---|
+| Cost analytics | "What are the top 3 most expensive cost centres this quarter?" | Knowledge graph + DuckDB cost metrics |
+| Trend analysis | "Give me a month-by-month breakdown of compute spend across all lines of business" | DuckDB (Jan–Mar 2026 usage data) |
+| Entity lookup | "What does the Loan Origination System do and which cost centre owns it?" | Neo4j graph + Elasticsearch descriptions |
+| Customer data | "How many customers do we have and who are the top spenders?" | Snowflake — DEMO_DB (100 customers) |
+| Large-scale data | "Show me the top 3 revenue customers across our full customer base" | Dremio — 4.8M customers, 177M orders |
+| Cross-system narrative | "Summarise our cost position and top customer revenue in one view" | All three systems in a single turn |
+
+**Security is first-class.** Every user signs in with their corporate Azure AD
+identity. That identity flows through to each data source — users only see data
+their role permits. The assistant refuses to reveal credentials, internal
+architecture, or data outside the user's access scope. A request for system
+credentials is blocked by the Azure AI content filter before it ever reaches the
+model.
+
+**This is a demo product.** All data is synthetic. The purpose is to prove the
+architecture pattern — a single authenticated AI layer over heterogeneous enterprise
+data sources — and validate the guardrails, identity propagation, and query quality
+before applying the pattern to real data.
 
 ---
 

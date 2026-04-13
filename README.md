@@ -50,6 +50,123 @@ before applying the pattern to real data.
 
 ---
 
+## Components
+
+### 1. Chatbot Container (FastAPI + WebSocket)
+
+The entry point for all user interaction. A Python FastAPI application deployed as
+an Azure Container App. It handles the SSO login flow, serves the browser UI, and
+manages a persistent WebSocket connection per user session. Every user message
+arrives over WebSocket; responses stream back token-by-token. The container has no
+direct database credentials — it holds only the Entra ID client secret and the
+Azure AI API key.
+
+**Key files:** `server.py`, `interfaces/web.py`, `chatbot_core.py`
+
+---
+
+### 2. Identity — Microsoft Entra ID (Azure AD)
+
+All authentication runs through Entra ID. The browser login uses `authorization_code
++ PKCE` (no client secret in the browser). After login the server holds an
+`id_token` (who the user is) and an `access_token` (delegated identity to pass
+downstream). Sessions are stored server-side behind an HttpOnly cookie — no tokens
+are ever sent to the browser.
+
+Two app registrations are provisioned by Pulumi:
+- **KG Chatbot** — the web SSO application users log into
+- **KG MCP Server** — a protected API resource; the chatbot holds the `MCP.Access`
+  app role so it can call the MCP server machine-to-machine
+
+---
+
+### 3. AI Model — Claude on Azure AI
+
+The chatbot calls Claude (Haiku 4.5) via an **Azure AI endpoint**, not the Anthropic
+API directly. This keeps all model traffic within the Azure network perimeter and
+allows the Azure AI content filter to intercept requests before they reach the model.
+The content filter is the outermost guardrail — it blocked the credentials-exfiltration
+test at HTTP 400 with 0 tokens consumed.
+
+**Config:** `AZURE_AI_ENDPOINT`, `AZURE_AI_MODEL`, `AZURE_AI_API_KEY`
+
+---
+
+### 4. Knowledge Graph Capability
+
+Three data stores that together answer cost analytics and entity lookup questions:
+
+| Store | What it holds | How accessed |
+|---|---|---|
+| **Neo4j AuraDB** | Organisational hierarchy — LOBs, cost centres, applications and their relationships | Cypher queries via the Neo4j Python driver |
+| **Elasticsearch** | Natural-language descriptions of every entity (RAG index) | `kg_describe_entity` / `kg_search_knowledge` tool calls |
+| **DuckDB** | 100 K cost metric rows (Jan–Mar 2026) loaded from CSV files in Azure Blob Storage | SQL via an internal MCP server |
+
+The DuckDB MCP server runs as a **separate Container App** (`mcp_server/`). It
+validates every inbound request with a JWT signed by Entra ID — the chatbot obtains
+that token using `client_credentials` (2LO, machine-to-machine). This means the MCP
+server is not publicly callable; only the chatbot app role can reach it.
+
+**Key files:** `capabilities/knowledge_graph.py`, `mcp_server/server.py`
+
+---
+
+### 5. Snowflake Capability
+
+Snowflake queries run under the **user's own delegated identity**, not a service
+account. The chatbot forwards the user's Entra ID `access_token` to the Azure AI
+Foundry Agent Service, which exchanges it for a Snowflake OAuth token via a
+WorkspaceConnection. The model never sees connection strings or passwords — it
+calls tools (`snowflake_run_sql`, `snowflake_get_schema`) and gets back result rows.
+Snowflake RBAC then enforces what tables that user's role can see.
+
+**Key files:** `capabilities/snowflake.py`, `auth/azure_ai_gateway.py`
+
+---
+
+### 6. Dremio Capability
+
+Structurally identical to Snowflake — user-delegated 3LO via the Azure AI Foundry
+Agent Service. The gateway exchanges the Entra ID token for a Dremio Cloud OAuth
+token. The capability exposes five tools (`dremio_nl_query`, `dremio_run_sql`,
+`dremio_search_tables`, `dremio_get_lineage`, `dremio_system_tables`). The
+`dremio_nl_query` tool adds a Bedrock-assisted NL→SQL step before executing, which
+lets the model describe intent in English and have SQL generated automatically for
+the Dremio schema.
+
+**Key files:** `capabilities/dremio.py`, `auth/azure_ai_gateway.py`
+
+---
+
+### 7. Session Management
+
+Two-tier persistence per user session:
+
+- **MongoDB Atlas** (free tier) — full conversation history, persisted across
+  reconnects. Every turn is written before the response is streamed back.
+- **In-memory sliding window** — last 5 turns kept in process for fast context
+  injection into the model prompt. Avoids sending the entire history on every turn.
+
+**Key file:** `session.py`
+
+---
+
+### 8. Infrastructure — Pulumi (TypeScript)
+
+All Azure resources are declared in `infrastructure-azure/index.ts` and managed by
+Pulumi. A single `pulumi up` provisions the Container Apps environment, both
+containers (chatbot + MCP server), ACR, Blob Storage, Log Analytics, Key Vault, AI
+Foundry Hub, and both Entra ID app registrations including app roles, redirect URIs,
+and test users. Secrets are Pulumi-encrypted (AES-256-GCM) and injected as Container
+App secrets at deploy time — they never appear in source control.
+
+The AWS ECS stack (`infrastructure/`) is kept intact but inactive, preserved for
+future testing when AWS Bedrock AgentCore adds MCP 3LO support.
+
+**Key files:** `infrastructure-azure/index.ts`, `infrastructure-azure/Pulumi.azure-dev.yaml`
+
+---
+
 ## Architecture
 
 ```

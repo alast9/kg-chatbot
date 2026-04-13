@@ -2,6 +2,14 @@
 
 ---
 
+## Demo Videos
+
+| Part 1 — Login, Knowledge Graph & Cost Analytics | Part 2 — Snowflake, Dremio & Guardrails |
+|---|---|
+| [![Part 1](https://img.youtube.com/vi/uTs35QvWa68/0.jpg)](https://youtu.be/uTs35QvWa68) | [![Part 2](https://img.youtube.com/vi/yaB72LpwrTg/0.jpg)](https://youtu.be/yaB72LpwrTg) |
+
+---
+
 ## The Problem
 
 Data analysts and business users in a financial services organisation routinely need
@@ -47,6 +55,22 @@ model.
 architecture pattern — a single authenticated AI layer over heterogeneous enterprise
 data sources — and validate the guardrails, identity propagation, and query quality
 before applying the pattern to real data.
+
+### Login — Azure AD SSO
+
+![Azure AD SSO login and capability badges after authentication](images/system_access.png)
+
+### Asking questions across systems
+
+![Multi-turn Q&A showing tool call traces and token usage](images/question_n_answer.png)
+
+### Querying Dremio (4.8M customers, 177M orders)
+
+![Dremio natural language query returning top customers and revenue figures](images/dremio.png)
+
+### Access control and guardrails in action
+
+![Guardrail test — RBAC blocks secret_contract table; credentials request blocked by Azure content filter](images/access_control_guardrails.png)
 
 ---
 
